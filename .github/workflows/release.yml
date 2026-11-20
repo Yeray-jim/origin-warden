@@ -75,10 +75,12 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path "release-build.log") {
-            $lines = Get-Content "release-build.log" -Tail 40
-            foreach ($line in $lines) {
-              Write-Host "::error title=Build log::$line"
+            $content = Get-Content "release-build.log"
+            $matches = $content | Select-String -Pattern "ERROR|Error|error|Traceback|Exception|FAILED|failed|not found|No module|cannot" | Select-Object -Last 25
+            foreach ($line in $matches) {
+              Write-Host "::error title=Build error::$($line.Line)"
             }
+            $content | Select-Object -Last 80 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
 
       - name: Upload build log
