@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.2",
+    [string]$Version = "0.4.3",
     [string]$Notes = "Instalacion guiada sin terminal, rutas raiz/origen/copia, actualizaciones y auditoria."
 )
 $ErrorActionPreference = "Stop"

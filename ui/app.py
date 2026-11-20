@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import flet as ft
 
 from syncsafe import APP_NAME, __version__
 from ui.manual import MANUAL
-from ui.release_client import ReleaseClient, ReleaseError, version_newer
+from ui.release_client import default_install_root, ReleaseClient, ReleaseError, version_newer
 from ui.services import (
     ConfigService,
     ensure_panel_copy,
@@ -917,8 +918,38 @@ class PanelApp:
                 spacing=6,
             )
         )
+        running = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else Path(__file__).resolve()
+        canonical = default_install_root() / "OriginWardenPanel.exe"
+        installer_script = self.base / "instalar_tarea.ps1"
+        running_canonical = running == canonical.resolve()
+        diag_lines = [
+            f"Version del panel: {__version__}",
+            f"Ejecutable: {running}",
+            f"Carpeta de datos: {self.base}",
+            f"Instalador: {installer_script} ({'presente' if installer_script.exists() else 'faltante'})",
+            f"Copia canonica: {canonical}",
+        ]
+        diag_column: list[ft.Control] = [
+            ft.Text("Diagnostico del panel", weight=ft.FontWeight.BOLD),
+            ft.Text(
+                "\n".join(diag_lines),
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                selectable=True,
+            ),
+        ]
+        if not running_canonical:
+            diag_column.append(
+                ft.Text(
+                    "Aviso: estas ejecutando una copia fuera de la carpeta canonica. "
+                    "Usa el acceso directo a %LOCALAPPDATA%\\OriginWarden\\OriginWardenPanel.exe.",
+                    size=12,
+                    color=AMBER,
+                )
+            )
+        diag = card(ft.Column(diag_column, spacing=6))
         return ft.Column(
-            [ft.Text("Instalacion y actualizacion", size=26, weight=ft.FontWeight.BOLD), body, remote],
+            [ft.Text("Instalacion y actualizacion", size=26, weight=ft.FontWeight.BOLD), body, remote, diag],
             spacing=16,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -1064,20 +1095,23 @@ class PanelApp:
             service_path = self.base / "OriginWardenService.exe"
             installer_path = self.base / "instalar_tarea.ps1"
             release = self._release_info
-            if not installer_path.exists() or not service_path.exists():
-                self.install_status.value = "Descargando servicio verificado desde GitHub..."
+            self.install_status.value = "Descargando y verificando servicio desde GitHub..."
+            self.page.update()
+            try:
+                release = release or await asyncio.to_thread(self.release.check)
+                self._release_info = release
+                service_path, installer_path = await asyncio.to_thread(
+                    self.release.prepare_service, release
+                )
+            except Exception as exc:
+                if not installer_path.exists() or not service_path.exists():
+                    raise ReleaseError(
+                        f"No se pudo obtener el servicio desde GitHub: {exc}"
+                    ) from exc
+                self.install_status.value = (
+                    "No se pudo consultar GitHub; se usaran los archivos locales."
+                )
                 self.page.update()
-                try:
-                    release = release or await asyncio.to_thread(self.release.check)
-                    self._release_info = release
-                    service_path, installer_path = await asyncio.to_thread(
-                        self.release.prepare_service, release
-                    )
-                except Exception as exc:
-                    if not installer_path.exists():
-                        raise ReleaseError(
-                            f"No se pudo obtener el servicio desde GitHub: {exc}"
-                        ) from exc
             service_target = self.base / "OriginWardenService.exe"
             if service_path.exists():
                 if service_path.resolve() != service_target.resolve():
@@ -1115,13 +1149,31 @@ class PanelApp:
         self.install_status.value = "Reparando tarea y ejecutable del servicio..."
         self.page.update()
         try:
+            release = self._release_info
             service_path = self.base / "OriginWardenService.exe"
+            installer_path = self.base / "instalar_tarea.ps1"
+            try:
+                release = release or await asyncio.to_thread(self.release.check)
+                self._release_info = release
+                service_path, installer_path = await asyncio.to_thread(
+                    self.release.prepare_service, release
+                )
+            except Exception:
+                if not installer_path.exists() or not service_path.exists():
+                    raise ReleaseError(
+                        "No se pudo obtener el servicio desde GitHub y no hay archivos locales."
+                    )
+            service_target = self.base / "OriginWardenService.exe"
+            if service_path.exists():
+                if service_path.resolve() != service_target.resolve():
+                    shutil.copy2(service_path, service_target)
             receipt = self.installer.receipt() or {}
+            version = release.version if release else str(receipt.get("version") or __version__)
             ok, message = await asyncio.to_thread(
                 self.installer.repair,
                 self.config_service.path,
-                service_path if service_path.exists() else None,
-                str(receipt.get("version") or __version__),
+                service_target if service_target.exists() else None,
+                version,
             )
             self.install_status.value = message
             self._snack(message, error=not ok)

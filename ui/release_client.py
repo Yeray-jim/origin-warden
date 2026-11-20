@@ -210,18 +210,34 @@ class ReleaseClient:
     def apply_panel_update(self, new_exe: Path) -> None:
         if not getattr(sys, "frozen", False):
             raise ReleaseError("La actualizacion automatica del panel solo aplica al ejecutable empaquetado.")
-        installed = default_install_root() / "OriginWardenPanel.exe"
-        old_exe = installed.resolve() if installed.exists() else Path(sys.executable).resolve()
+        running = Path(sys.executable).resolve()
+        canonical = (default_install_root() / "OriginWardenPanel.exe").resolve()
+        targets: list[Path] = [running]
+        if canonical != running:
+            targets.append(canonical)
         script = self.runtime / "update" / "apply-panel-update.ps1"
+        log = self.runtime / "update" / "panel-update.log"
         script.parent.mkdir(parents=True, exist_ok=True)
+        new_path = str(new_exe.resolve()).replace("'", "''")
+        running_path = str(running).replace("'", "''")
+        target_lines = "\n".join(
+            f"  Copy-Item -LiteralPath '{new_path}' -Destination '{str(t).replace(chr(39), chr(39) * 2)}' -Force"
+            for t in targets
+        )
+        log_path = str(log).replace("'", "''")
         script.write_text(
             "$ErrorActionPreference='Stop'\n"
-            f"$old='{str(old_exe).replace(chr(39), chr(39)*2)}'\n"
-            f"$new='{str(new_exe).replace(chr(39), chr(39)*2)}'\n"
             f"$pidValue={os.getpid()}\n"
             "Wait-Process -Id $pidValue -Timeout 60 -ErrorAction SilentlyContinue\n"
-            "Copy-Item -LiteralPath $new -Destination $old -Force\n"
-            "Start-Process -FilePath $old\n",
+            f"Add-Content -Path '{log_path}' -Value 'update_started' -Encoding UTF8\n"
+            "try {\n"
+            f"{target_lines}\n"
+            f"  Add-Content -Path '{log_path}' -Value 'update_ok' -Encoding UTF8\n"
+            "} catch {\n"
+            f"  Add-Content -Path '{log_path}' -Value \"update_failed: $($_.Exception.Message)\" -Encoding UTF8\n"
+            "  exit 1\n"
+            "}\n"
+            f"Start-Process -FilePath '{running_path}'\n",
             encoding="utf-8",
         )
         subprocess.Popen(

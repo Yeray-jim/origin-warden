@@ -7,7 +7,7 @@ param(
     [string]$Trigger = "Logon",
     [string]$ServiceExe = "",
     [string]$Owner = "",
-    [string]$Version = "0.4.2",
+    [string]$Version = "0.4.3",
     [switch]$ApplyPermissions,
     [switch]$StartService,
     [switch]$NoElevate
