@@ -11,6 +11,8 @@ $Venv = Join-Path $Root ".venv"
 $Python = Join-Path $Venv "Scripts\python.exe"
 $Flet = Join-Path $Venv "Scripts\flet.exe"
 $Dist = Join-Path $Root "dist"
+$PanelDist = Join-Path $Dist "panel"
+$ServiceDist = Join-Path $Dist "service"
 $Release = Join-Path $Root "release"
 $Package = Join-Path $Dist "paquete"
 
@@ -32,7 +34,7 @@ if (-not $PanelOnly) {
     & $Python -m PyInstaller `
         --noconfirm --clean --onefile --noconsole `
         --name OriginWardenService `
-        --distpath $Dist `
+        --distpath $ServiceDist `
         --workpath (Join-Path $Root "build\servicio") `
         --specpath (Join-Path $Root "build\servicio") `
         --exclude-module flet --exclude-module ui `
@@ -45,17 +47,18 @@ if (-not $ServiceOnly) {
     try {
         & $Flet pack panel.pyw `
             --name OriginWardenPanel `
+            --yes `
             --product-name "Origin Warden" `
             --file-description "Panel de control de Origin Warden" `
             --product-version $Version `
             --file-version ($Version + ".0") `
             --company-name "Origin Warden" `
-            --distpath $Dist
+            --distpath $PanelDist
     } finally { Pop-Location }
 }
 
-Copy-Item (Join-Path $Dist "OriginWardenService.exe") $Release -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $Dist "OriginWardenPanel.exe") $Release -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $ServiceDist "OriginWardenService.exe") $Release -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $PanelDist "OriginWardenPanel.exe") $Release -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Root "instalar_tarea.ps1") $Release
 Copy-Item (Join-Path $Root "README.md") $Release
 Copy-Item (Join-Path $Root "config.json") $Release
