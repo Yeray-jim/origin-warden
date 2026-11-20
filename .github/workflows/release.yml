@@ -76,15 +76,14 @@ jobs:
         run: |
           if (Test-Path "release-build.log") {
             $content = Get-Content "release-build.log"
-            $matches = $content | Select-String -Pattern "ERROR|Error|error|Traceback|Exception|FAILED|failed|not found|No module|cannot" | Select-Object -Last 25
-            foreach ($line in $matches) {
-              Write-Host "::error title=Build error::$($line.Line)"
-            }
             $trace = $content | Select-String -Pattern "Traceback" | Select-Object -Last 1
             if ($trace) {
               $start = [Math]::Max(0, $trace.LineNumber - 2)
-              $block = ($content[$start..($content.Count - 1)] -join "`n")
-              Write-Host "::error title=Full traceback::$block"
+              $block = ($content[$start..($content.Count - 1)] -join " | ")
+              if ($block.Length -gt 6000) { $block = $block.Substring($block.Length - 6000) }
+              Write-Host "::error title=Build traceback::$block"
+            } else {
+              $content | Select-Object -Last 40 | ForEach-Object { Write-Host "::error title=Build log::$_" }
             }
             $content | Select-Object -Last 100 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
