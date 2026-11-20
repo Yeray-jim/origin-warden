@@ -1,0 +1,72 @@
+{
+  "ORIGEN": "C:\\CarpetaCompartida\\Mis_Originales",
+  "DESTINO": "\\\\servidor\\recurso\\Publico_Usuarios",
+  "APORTES": {
+    "subcarpeta": "Aportes_Usuarios",
+    "conflictos": "_Conflictos",
+    "papelera": "_Papelera",
+    "cuarentena": "_Cuarentena",
+    "politica_conflicto": "versionar"
+  },
+  "OBSERVACION": {
+    "modo_origen": "auto",
+    "modo_destino": "auto",
+    "intervalo_polling_seg": 5.0
+  },
+  "RECONCILIACION": {
+    "inicial": true,
+    "intervalo_min": 20,
+    "restauracion_max_min": 60,
+    "debounce_seg": 1.5,
+    "trabajadores": 2,
+    "reintentos_max": 8,
+    "espera_inicial_seg": 0.5,
+    "espera_maxima_seg": 10.0,
+    "tolerancia_mtime_seg": 2,
+    "verificar_hash": false,
+    "gracia_borrado_seg": 60
+  },
+  "SEGURIDAD": {
+    "requerir_armado": true,
+    "modo_inicial": "simulacion",
+    "max_borrados_lote": 50,
+    "max_borrados_porcentaje": 10,
+    "max_ingesta_archivos_lote": 200,
+    "max_ingesta_mb_lote": 1024,
+    "papelera_activa": true,
+    "papelera_dias": 7,
+    "papelera_max_gb": 10,
+    "max_aporte_mb": 2048,
+    "watchdog_sin_progreso_min": 15,
+    "fallos_modo_seguro": 3,
+    "ventana_fallos_min": 15,
+    "heartbeat_seg": 5,
+    "heartbeat_vencido_seg": 20,
+    "conservar_version_destino": true
+  },
+  "FILTROS": {
+    "IGNORAR_NOMBRES": [
+      "~$*",
+      ".~lock.*",
+      ".sync-*.tmp",
+      ".syncsafe.*",
+      "*.tmp",
+      "*.temp",
+      "*.crdownload",
+      "*.part",
+      "*.partial"
+    ],
+    "IGNORAR_DIRECTORIOS": [
+      "$RECYCLE.BIN",
+      "System Volume Information",
+      ".git",
+      "__pycache__"
+    ]
+  },
+  "LOG": {
+    "archivo": "logs\\sync.log",
+    "nivel": "INFO",
+    "max_bytes": 5242880,
+    "copias": 5
+  }
+}

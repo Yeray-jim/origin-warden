@@ -1,0 +1,14 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.py[cod]
+*.log
+logs/*.log
+runtime/*.json
+runtime/control/
+config.json.bak
+config.lastgood.json
+*.spec
+.ruff_cache/
+.pytest_cache/
