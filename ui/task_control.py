@@ -19,6 +19,9 @@ class TaskState:
     last_result: int | None = None
     last_run: str | None = None
     next_run: str | None = None
+    action_execute: str | None = None
+    action_arguments: str | None = None
+    action_working_directory: str | None = None
     error: str | None = None
 
     @property
@@ -75,7 +78,9 @@ class TaskController:
             "$task=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue;"
             "if($null -eq $task){@{exists=$false}|ConvertTo-Json -Compress; exit 0};"
             "$info=Get-ScheduledTaskInfo -TaskName $name -ErrorAction SilentlyContinue;"
-            "$obj=[ordered]@{exists=$true;state=$task.State.ToString();last_result=$null;last_run=$null;next_run=$null};"
+            "$act=$task.Actions | Select-Object -First 1;"
+            "$obj=[ordered]@{exists=$true;state=$task.State.ToString();last_result=$null;last_run=$null;next_run=$null;action_execute=$null;action_arguments=$null;action_working_directory=$null};"
+            "if($act){$obj.action_execute=$act.Execute;$obj.action_arguments=$act.Arguments;$obj.action_working_directory=$act.WorkingDirectory};"
             "if($info){$obj.last_result=[int64]$info.LastTaskResult;$obj.last_run=$info.LastRunTime.ToString('o');$obj.next_run=$info.NextRunTime.ToString('o')};"
             "$obj|ConvertTo-Json -Compress"
         )
@@ -95,6 +100,9 @@ class TaskController:
             last_result=raw.get("last_result"),
             last_run=raw.get("last_run"),
             next_run=raw.get("next_run"),
+            action_execute=raw.get("action_execute"),
+            action_arguments=raw.get("action_arguments"),
+            action_working_directory=raw.get("action_working_directory"),
         )
 
     def _action(self, verb: str) -> tuple[bool, str]:

@@ -9,8 +9,9 @@ from syncsafe.config import ConfigError, load_config, save_config_atomic
 
 
 BASE = {
+    "RAIZ": "C:\\Compartida",
     "ORIGEN": "C:\\Compartida\\Mis_Originales",
-    "DESTINO": "\\\\servidor\\recurso\\Publico_Usuarios",
+    "DESTINO": "C:\\Compartida\\Publico_Usuarios",
     "APORTES": {"subcarpeta": "Aportes_Usuarios"},
     "OBSERVACION": {"modo_origen": "auto", "modo_destino": "auto"},
     "RECONCILIACION": {"intervalo_min": 20, "restauracion_max_min": 60},
@@ -25,17 +26,35 @@ class ConfigTests(unittest.TestCase):
         target.write_text(json.dumps(data), encoding="utf-8")
         return target
 
-    def test_accepts_mixed_local_and_unc(self):
+    def test_accepts_root_origin_destination(self):
         with tempfile.TemporaryDirectory() as temp:
             target = self.write(Path(temp), BASE)
             config = load_config(target)
+            self.assertEqual(str(config.raiz), BASE["RAIZ"])
             self.assertEqual(str(config.origen), BASE["ORIGEN"])
             self.assertEqual(str(config.destino), BASE["DESTINO"])
             self.assertEqual(config.reconciliacion.intervalo_min, 20)
 
+    def test_accepts_nested_subfolders(self):
+        data = dict(BASE)
+        data["ORIGEN"] = "C:\\Compartida\\A\\Originales"
+        data["DESTINO"] = "C:\\Compartida\\B\\Copia"
+        with tempfile.TemporaryDirectory() as temp:
+            target = self.write(Path(temp), data)
+            config = load_config(target)
+            self.assertEqual(str(config.origen), data["ORIGEN"])
+
     def test_rejects_same_path(self):
         data = dict(BASE)
         data["DESTINO"] = data["ORIGEN"]
+        with tempfile.TemporaryDirectory() as temp:
+            target = self.write(Path(temp), data)
+            with self.assertRaises(ConfigError):
+                load_config(target)
+
+    def test_rejects_origin_outside_root(self):
+        data = dict(BASE)
+        data["ORIGEN"] = "C:\\Otra\\Originales"
         with tempfile.TemporaryDirectory() as temp:
             target = self.write(Path(temp), data)
             with self.assertRaises(ConfigError):
@@ -82,6 +101,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             target = self.write(Path(temp), data)
             config = load_config(target)
+            self.assertEqual(config.raiz, __import__("pathlib").PureWindowsPath("C:\\Compartida"))
             self.assertEqual(config.aportes.subcarpeta, "Aportes_Usuarios")
             self.assertEqual(config.seguridad.max_aporte_mb, 2048)
 

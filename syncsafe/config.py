@@ -104,6 +104,7 @@ class LogConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    raiz: PureWindowsPath
     origen: PureWindowsPath
     destino: PureWindowsPath
     base_dir: Path
@@ -113,6 +114,10 @@ class AppConfig:
     seguridad: SeguridadConfig = field(default_factory=SeguridadConfig)
     filtros: FiltrosConfig = field(default_factory=FiltrosConfig)
     log: LogConfig = field(default_factory=LogConfig)
+
+    @property
+    def raiz_str(self) -> str:
+        return str(self.raiz)
 
     @property
     def origen_str(self) -> str:
@@ -140,6 +145,7 @@ class AppConfig:
     def public_dict(self) -> dict[str, Any]:
         return {
             "version": __version__,
+            "raiz": self.raiz_str,
             "origen": self.origen_str,
             "destino": self.destino_str,
             "aportes": self.aportes.subcarpeta,
@@ -154,6 +160,7 @@ class AppConfig:
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
+            "RAIZ": self.raiz_str,
             "ORIGEN": self.origen_str,
             "DESTINO": self.destino_str,
             "APORTES": asdict(self.aportes),
@@ -213,6 +220,34 @@ def _validate_windows_path(value: str, label: str) -> PureWindowsPath:
     return p
 
 
+def _infer_root(origen: PureWindowsPath, destino: PureWindowsPath) -> PureWindowsPath:
+    try:
+        common = ntpath.commonpath([ntpath.normcase(str(origen)), ntpath.normcase(str(destino))])
+    except ValueError as exc:
+        raise ConfigError("No se puede inferir RAIZ; configure la ruta principal.") from exc
+    root = PureWindowsPath(common)
+    if not root.parts or root == PureWindowsPath(root.anchor):
+        raise ConfigError("No se puede inferir RAIZ; configure la ruta principal.")
+    return root
+
+
+
+def default_raw_config() -> dict[str, Any]:
+    return {
+        "RAIZ": "",
+        "ORIGEN": "",
+        "DESTINO": "",
+        "APORTES": asdict(AportesConfig()),
+        "OBSERVACION": asdict(ObservacionConfig()),
+        "RECONCILIACION": asdict(ReconciliacionConfig()),
+        "SEGURIDAD": asdict(SeguridadConfig()),
+        "FILTROS": {
+            "IGNORAR_NOMBRES": list(DEFAULT_IGNORAR_NOMBRES),
+            "IGNORAR_DIRECTORIOS": list(DEFAULT_IGNORAR_DIRECTORIOS),
+        },
+        "LOG": asdict(LogConfig()),
+    }
+
 def load_config(path: str | Path, *, allow_last_good: bool = True) -> AppConfig:
     config_path = Path(path).expanduser()
     if not config_path.is_absolute():
@@ -233,6 +268,21 @@ def _load_config_file(config_path: Path) -> AppConfig:
 
     origen = _validate_windows_path(_expand(str(raw.get("ORIGEN", ""))), "ORIGEN")
     destino = _validate_windows_path(_expand(str(raw.get("DESTINO", ""))), "DESTINO")
+    raiz_raw = str(raw.get("RAIZ", "")).strip()
+    if raiz_raw:
+        raiz = _validate_windows_path(_expand(raiz_raw), "RAIZ")
+    else:
+        raiz = _infer_root(origen, destino)
+    if _is_within(raiz, origen) or _is_within(raiz, destino):
+        raise ConfigError("ORIGEN y DESTINO deben estar dentro de RAIZ.")
+    if ntpath.normcase(str(raiz)) == ntpath.normcase(str(origen)):
+        raise ConfigError("ORIGEN no puede ser igual a RAIZ.")
+    if ntpath.normcase(str(raiz)) == ntpath.normcase(str(destino)):
+        raise ConfigError("DESTINO no puede ser igual a RAIZ.")
+    if not _is_within(origen, raiz):
+        raise ConfigError("ORIGEN debe estar dentro de RAIZ.")
+    if not _is_within(destino, raiz):
+        raise ConfigError("DESTINO debe estar dentro de RAIZ.")
     if ntpath.normcase(str(origen)) == ntpath.normcase(str(destino)):
         raise ConfigError("ORIGEN y DESTINO no pueden ser la misma ruta.")
     if _is_within(destino, origen):
@@ -277,6 +327,7 @@ def _load_config_file(config_path: Path) -> AppConfig:
         raise ConfigError("LOG.NIVEL invalido.")
 
     return AppConfig(
+        raiz=raiz,
         origen=origen,
         destino=destino,
         base_dir=config_path.parent,

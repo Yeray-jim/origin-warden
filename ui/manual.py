@@ -41,25 +41,45 @@ MANUAL = [
         ],
     },
     {
-        "title": "3. Instalacion automatica",
+        "title": "3. Instalacion sin terminal",
         "body": (
-            "Abre la pestana Instalacion. Verifica las rutas, guarda la configuracion y pulsa "
-            "Instalar o reparar. El asistente solicitara elevacion para aplicar permisos locales y "
-            "registrar la tarea. Si la ruta es UNC, la ACL remota debe aplicarse en el servidor; el "
-            "instalador mostrara los comandos y no intentara modificarla desde el cliente."
+            "Descarga el panel desde GitHub Releases y ejecutalo. No necesitas abrir PowerShell. "
+            "En Rutas selecciona primero el nodo principal. Si la raiz esta vacia, crea las carpetas "
+            "de origen y copia. Si tiene contenido, elige Englobar contenido para moverlo al origen "
+            "o Usar carpetas existentes. Despues abre Instalacion y pulsa Instalar servicio. "
+            "El panel descarga el servicio desde GitHub, verifica su SHA-256, solicita UAC y registra "
+            "la tarea. Al finalizar, revisa la simulacion y pulsa Armar sistema."
         ),
         "bullets": [
-            "La primera ejecucion se hace en modo simulacion.",
-            "Revisa el resumen y pulsa Armar para permitir cambios reales.",
-            "El instalador guarda respaldos de configuracion, ACL y tarea.",
-            "Si UAC se deniega, no se aplican cambios parciales.",
+            "UAC es una ventana de Windows; no es una terminal.",
+            "El boton Instalar servicio solo aparece si no hay una instalacion.",
+            "Si ya esta instalado, usa Reparar o Actualizar; no se permite instalar dos veces.",
+            "Si la ruta es UNC, la ACL remota se aplica en el servidor.",
+            "La instalacion queda auditada en runtime/installation.json.",
         ],
         "commands": [
-            "powershell -ExecutionPolicy Bypass -File .\\instalar_tarea.ps1 -Action Install -ApplyPermissions -StartService",
+            "Las opciones avanzadas y comandos manuales estan al final del manual.",
         ],
     },
     {
-        "title": "4. Permisos NTFS y recurso compartido",
+        "title": "4. Configuracion de rutas",
+        "body": (
+            "El nodo principal es la carpeta compartida. El origen y la copia deben estar dentro de "
+            "ese nodo y no pueden estar uno dentro del otro. Se permiten subcarpetas. "
+            "Con la raiz vacia puedes crear la estructura. Con contenido puedes mover todo al origen "
+            "o adoptar carpetas existentes. El modo Englobar exige origen y copia como hijos directos "
+            "de la raiz, origen vacio y confirmacion. La operacion se registra y puede intentar rollback."
+        ),
+        "bullets": [
+            "No cambies la raiz con el servicio instalado: desinstala primero.",
+            "Si el destino ya tiene contenido, la simulacion mostrara como aportes los archivos desconocidos.",
+            "El panel muestra cantidad, tamano y avisos antes de mover.",
+            "No se sobrescribe ningun archivo durante la migracion.",
+        ],
+        "commands": [],
+    },
+    {
+        "title": "5. Permisos NTFS y recurso compartido",
         "body": (
             "icacls solo cambia permisos NTFS. Los permisos del recurso compartido se ajustan aparte. "
             "Conserva SYSTEM y Administradores para no bloquear la recuperacion. Ejecuta los comandos "
@@ -77,7 +97,7 @@ MANUAL = [
         ],
     },
     {
-        "title": "5. Subidas de usuarios y aportes",
+        "title": "6. Subidas de usuarios y aportes",
         "body": (
             "Cuando un usuario crea una ruta nueva en el destino, el servicio la copia a "
             "ORIGEN\\Aportes_Usuarios. El mapeo hace que el archivo publico siga correspondiendo a esa "
@@ -94,7 +114,7 @@ MANUAL = [
         "commands": [],
     },
     {
-        "title": "6. Restauracion y borrados",
+        "title": "7. Restauracion y borrados",
         "body": (
             "Si un usuario borra una ruta gestionada en el destino, el servicio la restaura desde el "
             "origen o desde aportes. El evento se atiende de inmediato; el barrido de seguridad "
@@ -110,7 +130,7 @@ MANUAL = [
         "commands": [],
     },
     {
-        "title": "7. Modo seguro, aprobaciones y papelera",
+        "title": "8. Modo seguro, aprobaciones y papelera",
         "body": (
             "El servicio entra en modo seguro si la identidad no coincide, si falla repetidamente o si "
             "no puede verificar permisos. En modo seguro sigue vivo y escribe estado, pero no modifica "
@@ -130,7 +150,7 @@ MANUAL = [
         ],
     },
     {
-        "title": "8. Problemas frecuentes",
+        "title": "9. Problemas frecuentes",
         "body": (
             "Revisa primero el estado y el registro. Si la tarea no arranca, comprueba la cuenta, "
             "la ruta UNC y la contrasena de la cuenta de servicio. Si aparece acceso denegado, revisa "
@@ -151,7 +171,24 @@ MANUAL = [
         ],
     },
     {
-        "title": "9. Apagar, reiniciar y desinstalar",
+        "title": "10. Actualizaciones",
+        "body": (
+            "El panel consulta GitHub Releases al iniciar y cada seis horas. Tambien puedes pulsar "
+            "Buscar actualizaciones. Si hay una version nueva, muestra las versiones y pide confirmacion. "
+            "El servicio se actualiza con backup y rollback. El panel se reinicia mediante un proceso "
+            "auxiliar oculto. Se verifica SHA-256; no hay certificado de firma en esta version, por eso "
+            "la actualizacion nunca es silenciosa."
+        ),
+        "bullets": [
+            "Configuracion, logs, marcadores, papelera y aportes se conservan.",
+            "Si el servicio no arranca tras actualizar, se intenta restaurar la version anterior.",
+            "Sin conexion, el servicio instalado sigue funcionando.",
+            "No se permite instalar dos veces; actualizar y reparar son acciones distintas.",
+        ],
+        "commands": [],
+    },
+    {
+        "title": "11. Apagar, reiniciar y desinstalar",
         "body": (
             "Apagar el servicio detiene la sincronizacion y las restauraciones. El panel intenta una "
             "parada ordenada y, si no responde, usa Task Scheduler. Cerrar el panel no apaga el servicio. "

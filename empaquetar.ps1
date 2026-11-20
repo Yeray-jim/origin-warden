@@ -1,4 +1,5 @@
 param(
+    [string]$Version = "0.4.0",
     [switch]$SkipVenv,
     [switch]$ServiceOnly,
     [switch]$PanelOnly
@@ -9,75 +10,91 @@ $Root = $PSScriptRoot
 $Venv = Join-Path $Root ".venv"
 $Python = Join-Path $Venv "Scripts\python.exe"
 $Flet = Join-Path $Venv "Scripts\flet.exe"
+$Dist = Join-Path $Root "dist"
+$Release = Join-Path $Root "release"
+$Package = Join-Path $Dist "paquete"
 
 if (-not $SkipVenv) {
-    if (-not (Test-Path $Python)) {
-        py -3 -m venv $Venv
-    }
+    if (-not (Test-Path $Python)) { py -3 -m venv $Venv }
     & $Python -m pip install --upgrade pip
     & $Python -m pip install -r (Join-Path $Root "requirements-dev.txt")
 }
+if (-not (Test-Path $Python)) { throw "No existe $Python. Ejecuta el script sin -SkipVenv." }
 
-if (-not (Test-Path $Python)) {
-    throw "No existe $Python. Ejecuta el script sin -SkipVenv."
-}
-
-$Dist = Join-Path $Root "dist"
-$Package = Join-Path $Dist "paquete"
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
+if (Test-Path $Release) { Remove-Item -Recurse -Force $Release }
+New-Item -ItemType Directory -Force -Path $Release | Out-Null
 
 if (-not $PanelOnly) {
     & $Python -m PyInstaller `
-        --noconfirm `
-        --clean `
-        --onedir `
-        --noconsole `
+        --noconfirm --clean --onefile --noconsole `
         --name OriginWardenService `
         --distpath $Dist `
         --workpath (Join-Path $Root "build\servicio") `
         --specpath (Join-Path $Root "build\servicio") `
-        --exclude-module flet `
-        --exclude-module ui `
+        --exclude-module flet --exclude-module ui `
         (Join-Path $Root "sincronizador.pyw")
 }
 
 if (-not $ServiceOnly) {
-    if (-not (Test-Path $Flet)) {
-        throw "No existe flet.exe en el entorno. Instala requirements-dev.txt."
-    }
+    if (-not (Test-Path $Flet)) { throw "No existe flet.exe. Instala requirements-dev.txt." }
     Push-Location $Root
     try {
         & $Flet pack panel.pyw `
             --name OriginWardenPanel `
-            --onedir `
             --noconsole `
+            --product-name "Origin Warden" `
+            --file-description "Panel de control de Origin Warden" `
+            --product-version $Version `
+            --file-version ($Version + ".0") `
+            --company-name "Origin Warden" `
             --distpath $Dist
-    } finally {
-        Pop-Location
+    } finally { Pop-Location }
+}
+
+Copy-Item (Join-Path $Dist "OriginWardenService.exe") $Release -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $Dist "OriginWardenPanel.exe") $Release -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $Root "instalar_tarea.ps1") $Release
+Copy-Item (Join-Path $Root "README.md") $Release
+Copy-Item (Join-Path $Root "config.json") $Release
+
+$assets = @("OriginWardenPanel.exe", "OriginWardenService.exe", "instalar_tarea.ps1")
+$manifest = [ordered]@{
+    schema = 1
+    app = "origin-warden"
+    channel = "stable"
+    version = $Version
+    min_panel_version = $Version
+    released_at = (Get-Date).ToUniversalTime().ToString("o")
+    notes = "Instalacion guiada sin terminal, configuracion de raiz/origen/copia, actualizaciones y auditoria."
+    panel = $null
+    service = $null
+    installer = $null
+    config_schema = 1
+}
+foreach ($asset in $assets) {
+    $path = Join-Path $Release $asset
+    if (-not (Test-Path $path)) { continue }
+    $entry = [ordered]@{
+        name = $asset
+        sha256 = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower()
+        size = (Get-Item $path).Length
+    }
+    if ($asset -eq "OriginWardenPanel.exe") { $manifest.panel = $entry }
+    elseif ($asset -eq "OriginWardenService.exe") { $manifest.service = $entry }
+    else { $manifest.installer = $entry }
+}
+$manifestJson = $manifest | ConvertTo-Json -Depth 6
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $Release "release-manifest.json"), $manifestJson, $utf8NoBom)
+
+$sums = foreach ($asset in $assets) {
+    $path = Join-Path $Release $asset
+    if (Test-Path $path) {
+        "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLower(), $asset
     }
 }
+$sums | Set-Content -Path (Join-Path $Release "SHA256SUMS.txt") -Encoding ASCII
 
-if (Test-Path $Package) {
-    Remove-Item -Recurse -Force $Package
-}
-New-Item -ItemType Directory -Force -Path $Package | Out-Null
-
-Copy-Item (Join-Path $Root "config.json") $Package
-Copy-Item (Join-Path $Root "instalar_tarea.ps1") $Package
-Copy-Item (Join-Path $Root "README.md") $Package
-Copy-Item (Join-Path $Root "requirements.txt") $Package
-if (Test-Path (Join-Path $Dist "OriginWardenService")) {
-    Copy-Item -Recurse (Join-Path $Dist "OriginWardenService") $Package
-}
-if (Test-Path (Join-Path $Dist "OriginWardenPanel")) {
-    Copy-Item -Recurse (Join-Path $Dist "OriginWardenPanel") $Package
-}
-
-$launcher = @"
-@echo off
-start "" "%~dp0OriginWardenPanel\OriginWardenPanel.exe"
-"@
-Set-Content -Path (Join-Path $Package "AbrirPanel.bat") -Value $launcher -Encoding ASCII
-
-Write-Host "Paquete generado en: $Package" -ForegroundColor Green
-Write-Host "Ejecuta AbrirPanel.bat o instala la tarea con instalar_tarea.ps1." -ForegroundColor Green
+Write-Host "Release preparada en: $Release" -ForegroundColor Green
+Write-Host "Sube los archivos a GitHub Releases con: .\publicar_release.ps1 -Version $Version" -ForegroundColor Green

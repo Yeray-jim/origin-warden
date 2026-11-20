@@ -1,8 +1,10 @@
 # Origin Warden
 
-Version: **0.3.0**
+Version: **0.4.0**
 
 Repositorio: [github.com/Yeray-jim/origin-warden](https://github.com/Yeray-jim/origin-warden)
+
+Descarga del panel: [ultima release](https://github.com/Yeray-jim/origin-warden/releases/latest)
 
 Espejo unidireccional protegido para carpetas compartidas de Windows y SMB. Mantiene una copia pública actualizada sin exponer los originales, permite que los usuarios suban archivos nuevos a un buzón controlado y restaura automáticamente los borrados accidentales de la copia.
 
@@ -88,26 +90,56 @@ origin-warden/
 ├── requirements-dev.txt
 ├── instalar_tarea.ps1
 ├── empaquetar.ps1
+├── publicar_release.ps1
 ├── syncsafe/
+│   ├── config.py
+│   ├── engine.py
+│   ├── path_setup.py
+│   ├── security.py
+│   └── ...
 ├── ui/
+│   ├── app.py
+│   ├── release_client.py
+│   ├── services.py
+│   └── ...
 ├── tests/
 ├── logs/
 └── runtime/
 ```
 
+Los ejecutables no se guardan en el arbol Git. Se publican como assets de GitHub Releases.
+
 ## Requisitos
 
 - Windows 10 u 11.
 - PowerShell 5.1 o superior.
-- Python 3.10 o superior para ejecutar desde fuente.
+- Permisos de administrador para aplicar ACL locales y registrar la tarea.
 - Acceso de lectura a `ORIGEN`.
 - Escritura en `ORIGEN\Aportes_Usuarios`.
 - Escritura en `DESTINO`.
 - Cuenta con permisos SMB si las rutas son UNC.
+- Python 3.10 o superior solo para desarrollo o ejecucion desde fuente.
 
-El paquete compilado no necesita Python instalado.
+La version publicada no necesita Python instalado y no requiere abrir una terminal.
 
-## Instalacion desde fuente
+## Instalacion recomendada, sin terminal
+
+1. Descarga `OriginWardenPanel.exe` desde la [ultima release](https://github.com/Yeray-jim/origin-warden/releases/latest).
+2. Ejecuta el panel.
+3. En **Rutas**, selecciona el nodo principal.
+4. Analiza la raiz:
+   - Si esta vacia, crea las carpetas de origen y copia.
+   - Si tiene contenido, elige **Englobar contenido** o **Usar carpetas existentes**.
+5. En **Instalacion**, pulsa **Instalar servicio**.
+6. El panel consulta GitHub, descarga el servicio, verifica su SHA-256 y lo instala.
+7. Acepta UAC cuando Windows lo solicite.
+8. Revisa el modo simulacion y pulsa **Armar sistema**.
+
+Durante el proceso no se abre PowerShell ni se escribe ningun comando. UAC es una ventana de Windows, no una terminal. El panel se copia a `%LOCALAPPDATA%\OriginWarden` y guarda alli la configuracion, los logs, el runtime y el ejecutable del servicio.
+
+La instalacion se audita en `runtime/installation.json` y `runtime/install-audit.jsonl`. Una segunda instalacion queda bloqueada por el panel y por el instalador.
+
+## Instalacion desde fuente, solo desarrollo
 
 ```powershell
 py -3 -m venv .venv
@@ -116,7 +148,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Edita `config.json` con tus rutas reales.
+Configura `config.json` o usa la pestana **Rutas** del panel.
 
 Valida la configuracion:
 
@@ -124,18 +156,7 @@ Valida la configuracion:
 python -m syncsafe --check-config
 ```
 
-Registra la tarea y aplica permisos locales:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\instalar_tarea.ps1 `
-  -Action Install -ApplyPermissions -StartService
-```
-
-Abre el panel, revisa el modo simulacion y pulsa **Armar sistema**. Tambien puedes armarlo por CLI:
-
-```powershell
-python -m syncsafe --arm
-```
+Abre el panel:
 
 ```powershell
 python panel.pyw
@@ -147,52 +168,79 @@ Para depurar con consola:
 python -m syncsafe --debug
 ```
 
-Pruebas unitarias del dominio y la configuracion:
+Pruebas unitarias:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-## Instalacion con paquete compilado
+## Publicacion de una release
+
+El flujo de mantenedor es:
 
 ```powershell
-.\empaquetar.ps1
+.\empaquetar.ps1 -Version 0.4.0
+.\publicar_release.ps1 -Version 0.4.0
 ```
 
-El resultado queda en `dist\paquete`:
+`empaquetar.ps1` genera:
 
 ```text
-dist\paquete\
-├── AbrirPanel.bat
-├── config.json
+release/
+├── OriginWardenPanel.exe
+├── OriginWardenService.exe
 ├── instalar_tarea.ps1
-├── README.md
-├── OriginWardenPanel\
-└── OriginWardenService\
+├── release-manifest.json
+└── SHA256SUMS.txt
 ```
 
-Edita `config.json` y ejecuta `AbrirPanel.bat`. Desde la pestana Instalacion puedes registrar la tarea, aplicar permisos locales y armar el sistema.
+`publicar_release.ps1` usa `gh release create` para publicar los assets.
 
-El panel Flet usa el runtime de Flutter y consume mas memoria mientras esta abierto. El servicio headless no incluye Flet y es el unico proceso que queda activo cuando cierras el panel.
+El panel consulta:
+
+```text
+https://github.com/Yeray-jim/origin-warden/releases/latest/download/release-manifest.json
+```
+
+No se usa la API de GitHub, por lo que no hay tokens ni limite de peticiones de API.
+
+## Actualizaciones
+
+- El panel comprueba si hay una release nueva al iniciar y cada 6 horas.
+- El boton **Buscar actualizaciones** permite comprobarlo manualmente.
+- Si hay una version nueva, muestra version actual, version publicada y pide confirmacion.
+- Descarga el asset, verifica tamano y SHA-256.
+- Actualiza el servicio con backup y rollback si no arranca.
+- Actualiza el panel con un proceso auxiliar oculto y lo reinicia.
+- Conserva `config.json`, `runtime`, `logs`, marcadores, papelera y aportes.
+
+No hay certificado de firma en esta version. Por eso:
+
+- La actualizacion nunca es silenciosa.
+- Se exige confirmacion del usuario.
+- Se verifica SHA-256 contra el manifest.
+- Se recomienda firmar los ejecutables en el futuro.
+- Una cuenta de GitHub comprometida podria alterar el manifest; la firma Authenticode eliminaria ese riesgo.
 
 ## Primer arranque
 
-1. La configuracion se valida y se crea la estructura de aportes.
+1. El panel valida la configuracion y la jerarquia de rutas.
 2. Si el sistema no esta armado, arranca en **simulacion**.
 3. El panel muestra el estado y el registro.
-4. Pulsa **Armar sistema** o ejecuta `python -m syncsafe --arm`.
+4. Revisa la simulacion y pulsa **Armar sistema**.
 5. El servicio se reinicia y comienza a aplicar cambios reales.
 
 En simulacion el servicio lee, calcula y registra, pero no copia, no borra y no ingesta.
 
 ## Uso del panel
 
-El panel tiene cinco secciones:
+El panel tiene seis secciones:
 
-- **Panel:** estado, interruptor del servicio, autoarranque, rutas, modo, guardias, aprobaciones y acciones rapidas.
-- **Configuracion:** rutas, observadores, intervalos, papelera, limites y nivel de log.
-- **Instalacion:** registro de tarea, permisos locales, armado y desinstalacion.
-- **Manual:** guia offline con pasos, comandos y recuperacion.
+- **Panel:** estado, interruptor del servicio, autoarranque, instalacion pendiente, actualizaciones, guardias y aprobaciones.
+- **Rutas:** nodo principal, origen, copia, analisis de contenido, creacion, englobado y adopcion de carpetas.
+- **Configuracion:** observadores, intervalos, papelera, limites y nivel de log.
+- **Instalacion:** instalar, actualizar, reparar, desinstalar y ver auditoria.
+- **Manual:** guia offline sin terminal y anexo avanzado.
 - **Registro:** ultimas lineas de `logs/sync.log`.
 
 El interruptor **Servicio**:
@@ -200,6 +248,52 @@ El interruptor **Servicio**:
 - Encender: habilita la tarea y la inicia.
 - Apagar: solicita parada ordenada, detiene la tarea y deshabilita el autoarranque.
 - Cerrar el panel no detiene el servicio.
+
+## Configuracion de rutas
+
+El panel trabaja con tres niveles:
+
+```text
+RAIZ
+├── ORIGEN
+└── DESTINO
+```
+
+`RAIZ` es la carpeta compartida principal. `ORIGEN` y `DESTINO` deben estar dentro de `RAIZ` y no pueden estar anidados entre si. Se permiten rutas con subcarpetas, por ejemplo `RAIZ\Trabajo\Originales` y `RAIZ\Publico\Copia`.
+
+### Raiz vacia
+
+El panel permite crear las carpetas de origen y copia, incluyendo rutas anidadas. No se mueve ni se borra nada.
+
+### Raiz con contenido
+
+Hay dos modos:
+
+**Englobar contenido**
+
+Crea la carpeta de originales y mueve a ella las carpetas y archivos sueltos de la raiz. En este modo:
+
+- Origen y destino deben ser hijos directos de la raiz.
+- La carpeta de origen debe estar vacia.
+- Se muestra un resumen y se pide confirmacion.
+- Se usa un journal y se intenta rollback si falla un movimiento.
+- No se sobrescribe nada.
+
+**Usar carpetas existentes**
+
+El usuario selecciona un origen y una copia que ya existen. Pueden tener contenido y estar en subcarpetas. Si el destino contiene archivos que no estan en el origen, el servicio los tratara como aportes de usuarios; la primera ejecucion en simulacion permite revisar el plan.
+
+La configuracion de rutas solo se puede cambiar con el servicio desinstalado. Esto evita tareas apuntando a una raiz distinta.
+
+## Auditoria de instalacion
+
+- La tarea programada es la fuente principal de verdad.
+- `runtime/installation.json` guarda version, tarea, ejecutable, raiz, origen, destino y hashes.
+- `runtime/install-audit.jsonl` registra intentos, bloqueos, reparaciones, actualizaciones y desinstalaciones.
+- El boton **Instalar servicio** solo existe si no hay instalacion.
+- Si ya esta instalado, las acciones son Iniciar, Reparar, Actualizar o Desinstalar.
+- Una segunda instalacion se bloquea en el panel y en `instalar_tarea.ps1`.
+- Una tarea existente sin recibo se marca como instalacion heredada y requiere reparacion o adopcion explicita.
 
 ## Carpetas y comportamiento
 
@@ -259,7 +353,8 @@ Las claves principales de `config.json`:
 
 ```json
 {
-  "ORIGEN": "C:\\CarpetaCompartida\\Mis_Originales",
+  "RAIZ": "\\\\servidor\\recurso",
+  "ORIGEN": "\\\\servidor\\recurso\\Mis_Originales",
   "DESTINO": "\\\\servidor\\recurso\\Publico_Usuarios",
   "APORTES": {
     "subcarpeta": "Aportes_Usuarios"
@@ -283,6 +378,8 @@ Las claves principales de `config.json`:
 }
 ```
 
+- `RAIZ`: carpeta compartida principal.
+- `ORIGEN` y `DESTINO`: subcarpetas dentro de `RAIZ`, no anidadas entre si.
 - `modo_origen` y `modo_destino`: `auto`, `nativo` o `polling`.
 - `auto` usa observador nativo para rutas locales y polling para UNC o unidades mapeadas.
 - `intervalo_min` debe ser menor que `restauracion_max_min`.
@@ -364,6 +461,8 @@ python -m syncsafe --debug
 - Si la papelera falla, no se borra.
 - Los usuarios publicos con permiso `Modify` pueden borrar su copia, pero no el original.
 - Un administrador o una cuenta comprometida puede modificar el origen. Manten copias offline y EDR si el riesgo lo exige.
+- Las actualizaciones usan HTTPS y SHA-256, pero no hay certificado de firma. Se exige confirmacion del usuario.
+- Si se compromete la cuenta de GitHub, el manifest podria ser alterado; la firma de codigo es una mejora pendiente.
 
 ## Registro y diagnostico
 
@@ -372,6 +471,10 @@ python -m syncsafe --debug
 - Estado: `runtime/status.json`.
 - Configuracion valida anterior: `config.lastgood.json`.
 - Resultado de instalacion: `runtime/install-result.json`.
+- Recibo de instalacion: `runtime/installation.json`.
+- Auditoria de instalacion: `runtime/install-audit.jsonl`.
+- Journal de rutas: `runtime/path-setup.json`.
+- Log de preparacion de rutas: `logs/path-setup.log`.
 - Papelera y conflictos: dentro de `ORIGEN\Aportes_Usuarios`.
 
 Comandos utiles:
@@ -383,6 +486,10 @@ Get-Content .\runtime\status.json
 ```
 
 ## Problemas frecuentes
+
+**El panel dice que no hay release publicada**
+
+Publica una release con `.\empaquetar.ps1` y `.\publicar_release.ps1`. El panel consulta siempre la ultima release estable.
 
 **La tarea no arranca**
 
@@ -415,20 +522,25 @@ Revisa `ORIGEN\Aportes_Usuarios\_Papelera`. Si el archivo estaba en el origen no
 
 ## Desinstalacion
 
+Desde el panel, en **Instalacion**, pulsa **Desinstalar tarea**. No hace falta usar la terminal.
+
+La desinstalacion no borra archivos del origen, destino, aportes ni papelera. Elimina la tarea programada. El panel permite volver a instalar despues.
+
+Comando avanzado equivalente:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\instalar_tarea.ps1 -Action Uninstall
 ```
 
-La desinstalacion no borra archivos del origen, destino, aportes ni papelera. Elimina la tarea programada.
-
 ## Estado del proyecto
 
-Version 0.3.0: primera implementacion funcional con servicio headless, panel Flet, reconciliacion nivel-triggered, ingesta de aportes, papelera, simulacion, armado, guardias de operaciones masivas, instalador y empaquetado.
+Version 0.4.0: instalacion y actualizacion sin terminal, descarga del servicio desde GitHub Releases, verificacion SHA-256, configuracion de raiz/origen/copia con creacion, englobado y adopcion, auditoria anti-duplicados, panel Flet, servicio headless, reconciliacion nivel-triggered, ingesta de aportes, papelera, simulacion y armado.
 
 Pendiente para versiones posteriores:
 
 - Pruebas de caos completas en Windows.
-- Limite por capacidad total de papelera, ademas de retencion por dias.
-- Verificacion por hash opcional.
+- Firma Authenticode de los ejecutables.
+- Firma criptografica del manifest de release.
+- Verificacion por hash opcional de archivos sincronizados.
 - Integracion opcional con Microsoft Defender para aportes.
-- Firma de codigo de los ejecutables.
+- Actualizacion delta para reducir descargas.

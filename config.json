@@ -1,5 +1,6 @@
 {
-  "ORIGEN": "C:\\CarpetaCompartida\\Mis_Originales",
+  "RAIZ": "\\\\servidor\\recurso",
+  "ORIGEN": "\\\\servidor\\recurso\\Mis_Originales",
   "DESTINO": "\\\\servidor\\recurso\\Publico_Usuarios",
   "APORTES": {
     "subcarpeta": "Aportes_Usuarios",

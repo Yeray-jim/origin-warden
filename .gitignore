@@ -12,3 +12,9 @@ config.lastgood.json
 *.spec
 .ruff_cache/
 .pytest_cache/
+release/
+*.exe
+config.paths.validate.json
+runtime/path-setup.json
+runtime/installation.json
+runtime/install-audit.jsonl

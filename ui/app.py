@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -11,8 +12,10 @@ import flet as ft
 
 from syncsafe import APP_NAME, __version__
 from ui.manual import MANUAL
+from ui.release_client import ReleaseClient, ReleaseError, version_newer
 from ui.services import (
     ConfigService,
+    ensure_panel_copy,
     InstallerService,
     LogReader,
     StatusReader,
@@ -50,10 +53,14 @@ class PanelApp:
     def __init__(self, page: ft.Page):
         self.page = page
         self.base = app_dir()
+        ensure_panel_copy()
         self.status_reader = StatusReader(self.base)
         self.tasks = TaskController(runtime_dir=self.base / "runtime")
         self.config_service = ConfigService(self.base)
-        self.installer = InstallerService(self.base)
+        self.installer = InstallerService(self.base, task_controller=self.tasks)
+        self.release = ReleaseClient(self.base)
+        self._release_info = None
+        self._update_available = False
         self.logs = LogReader(self.base)
         self.busy = False
         self._task_cache = None
@@ -68,9 +75,12 @@ class PanelApp:
         self._log_filter: ft.TextField | None = None
         self._build_status_controls()
         self._configure_page()
+        self.dir_picker = ft.FilePicker()
+        self.page.services = [*list(self.page.services), self.dir_picker]
         self._build_shell()
         self._select("panel")
         self.page.run_task(self._poll_loop)
+        self.page.run_task(self._auto_update_check)
 
     def _configure_page(self) -> None:
         self.page.title = f"{APP_NAME} {__version__}"
@@ -119,6 +129,7 @@ class PanelApp:
     def _build_shell(self) -> None:
         nav_items = [
             ("panel", "Panel", ft.Icons.DASHBOARD_OUTLINED),
+            ("paths", "Rutas", ft.Icons.FOLDER_OPEN),
             ("settings", "Configuracion", ft.Icons.TUNE),
             ("install", "Instalacion", ft.Icons.BUILD_OUTLINED),
             ("manual", "Manual", ft.Icons.MENU_BOOK_OUTLINED),
@@ -169,6 +180,8 @@ class PanelApp:
             if self._panel_view is None:
                 self._panel_view = self._build_panel()
             view = self._panel_view
+        elif key == "paths":
+            view = self._build_paths()
         elif key == "settings":
             view = self._build_settings()
         elif key == "install":
@@ -338,6 +351,294 @@ class PanelApp:
             expand=True,
         )
 
+
+    def _format_bytes(self, value: int) -> str:
+        size = float(value)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024 or unit == "TB":
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{value} B"
+
+    def _build_paths(self) -> ft.Control:
+        try:
+            config = self.config_service.load()
+            error = ""
+        except Exception as exc:
+            config = None
+            error = str(exc)
+        try:
+            audit = self.installer.audit()
+            installed = audit.status != "not_installed" and config is not None
+        except Exception:
+            installed = False
+        self._path_root = ft.TextField(
+            label="Nodo principal / carpeta compartida",
+            value=config.raiz_str if config else "",
+            hint_text=r"\\servidor\recurso o C:\CarpetaCompartida",
+            dense=True,
+            disabled=installed,
+            expand=True,
+        )
+        self._path_origin = ft.TextField(
+            label="Carpeta de originales",
+            value=config.origen_str if config else "",
+            hint_text=r"\\servidor\recurso\Mis_Originales",
+            dense=True,
+            disabled=installed,
+            expand=True,
+        )
+        self._path_destination = ft.TextField(
+            label="Carpeta publica para usuarios",
+            value=config.destino_str if config else "",
+            hint_text=r"\\servidor\recurso\Publico_Usuarios",
+            dense=True,
+            disabled=installed,
+            expand=True,
+        )
+        self._path_analysis_data = None
+        self._path_analysis = ft.Text(
+            "Selecciona la raiz y pulsa Analizar para ver el contenido.",
+            size=12,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            selectable=True,
+        )
+        self._path_status = ft.Text(error, size=12, color=RED if error else ft.Colors.ON_SURFACE_VARIANT, selectable=True)
+        self._path_warning = ft.Container(visible=False)
+        if installed:
+            self._path_warning.content = ft.Row(
+                [
+                    ft.Icon(ft.Icons.LOCK_OUTLINE, color=AMBER),
+                    ft.Text(
+                        "El servicio esta instalado. Desinstalalo antes de cambiar la raiz, el origen o la copia.",
+                        size=12,
+                        expand=True,
+                    ),
+                    ft.TextButton(content="Ir a Instalacion", on_click=lambda _e: self._select("install")),
+                ],
+                spacing=10,
+            )
+            self._path_warning.visible = True
+            self._path_warning.padding = 12
+            self._path_warning.border_radius = 10
+            self._path_warning.bgcolor = ft.Colors.AMBER_50
+        browse_root = ft.OutlinedButton(
+            content="Examinar",
+            icon=ft.Icons.FOLDER_OPEN,
+            disabled=installed,
+            on_click=self._pick_root_clicked,
+        )
+        analyze = ft.FilledButton(
+            content="Analizar raiz",
+            icon=ft.Icons.SEARCH,
+            disabled=installed,
+            on_click=self._analyze_root_clicked,
+        )
+        create = ft.OutlinedButton(
+            content="Crear estructura",
+            icon=ft.Icons.CREATE_NEW_FOLDER,
+            disabled=installed,
+            on_click=self._create_paths_clicked,
+        )
+        engulf = ft.OutlinedButton(
+            content="Englobar contenido",
+            icon=ft.Icons.DRIVE_FILE_MOVE_OUTLINED,
+            disabled=installed,
+            on_click=self._engulf_paths_clicked,
+        )
+        adopt = ft.OutlinedButton(
+            content="Usar carpetas existentes",
+            icon=ft.Icons.CHECK_CIRCLE_OUTLINE,
+            disabled=installed,
+            on_click=self._adopt_paths_clicked,
+        )
+        open_root = ft.OutlinedButton(
+            content="Abrir raiz",
+            icon=ft.Icons.OPEN_IN_NEW,
+            on_click=lambda _e: self._open_path("raiz"),
+        )
+        body = card(
+            ft.Column(
+                [
+                    ft.Text("Nodo principal y carpetas", size=22, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Define primero la carpeta compartida. Despues crea el origen y la copia, o adopta carpetas existentes. "
+                        "El origen y la copia pueden estar en subcarpetas de la raiz, pero no dentro del otro.",
+                        size=12,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                    self._path_warning,
+                    ft.Row([self._path_root, browse_root], spacing=10),
+                    ft.Row([self._path_origin, self._path_destination], spacing=12),
+                    ft.Row([analyze, open_root], spacing=10, wrap=True),
+                    self._path_analysis,
+                    ft.Divider(height=12, color=ft.Colors.OUTLINE_VARIANT),
+                    ft.Text("Preparar rutas", weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Si la raiz esta vacia, crea la estructura. Si ya tiene contenido, puedes moverlo al origen o usar carpetas existentes.",
+                        size=12,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                    ft.Row([create, engulf, adopt], spacing=10, wrap=True),
+                    self._path_status,
+                ],
+                spacing=12,
+            )
+        )
+        guide = card(
+            ft.Column(
+                [
+                    ft.Text("Como decidir", weight=ft.FontWeight.BOLD),
+                    ft.Text("Raiz vacia: crea las carpetas y continua con la instalacion.", size=12),
+                    ft.Text("Raiz con contenido y quieres conservarlo como original: Englobar contenido.", size=12),
+                    ft.Text("Raiz con carpetas de origen y copia ya existentes: Usar carpetas existentes.", size=12),
+                    ft.Text("El servicio debe estar desinstalado para mover contenido o cambiar rutas.", size=12, color=AMBER),
+                ],
+                spacing=6,
+            )
+        )
+        return ft.Column(
+            [ft.Text("Rutas de trabajo", size=26, weight=ft.FontWeight.BOLD), body, guide],
+            spacing=16,
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+
+    def _pick_root_clicked(self, _e) -> None:
+        self.page.run_task(self._pick_root_async)
+
+    async def _pick_root_async(self) -> None:
+        try:
+            path = await self.dir_picker.get_directory_path(dialog_title="Seleccionar nodo principal")
+            if path:
+                self._path_root.value = path
+                self.page.update()
+        except Exception as exc:
+            self._snack(f"No se pudo abrir el selector: {exc}", error=True)
+
+    def _analyze_root_clicked(self, _e) -> None:
+        self.page.run_task(self._analyze_root_async)
+
+    async def _analyze_root_async(self) -> None:
+        root = (self._path_root.value or "").strip()
+        if not root:
+            self._path_status.value = "Escribe o selecciona la raiz."
+            self._path_status.color = RED
+            self.page.update()
+            return
+        self._path_status.value = "Analizando raiz..."
+        self._path_status.color = ft.Colors.ON_SURFACE_VARIANT
+        self.page.update()
+        try:
+            analysis = await asyncio.to_thread(self.config_service.analyze_root, root)
+            self._path_analysis_data = analysis
+            state = "vacia" if analysis.empty else "con contenido"
+            lines = [
+                f"Raiz: {analysis.root}",
+                f"Estado: {state}",
+                f"Entradas: {analysis.entries} | Archivos: {analysis.files} | Carpetas: {analysis.directories}",
+                f"Tamano aproximado: {self._format_bytes(analysis.total_bytes)}",
+            ]
+            if analysis.top_level:
+                lines.append("Elementos: " + ", ".join(analysis.top_level[:20]))
+            if analysis.warnings:
+                lines.append("Avisos: " + " | ".join(analysis.warnings[:10]))
+            if analysis.error:
+                lines.append("Error: " + analysis.error)
+            self._path_analysis.value = "\n".join(lines)
+            base = root.rstrip("\\/")
+            if not (self._path_origin.value or "").strip():
+                self._path_origin.value = f"{base}\\Mis_Originales"
+            if not (self._path_destination.value or "").strip():
+                self._path_destination.value = f"{base}\\Publico_Usuarios"
+            self._path_status.value = "Analisis completado."
+            self._path_status.color = GREEN if not analysis.error else RED
+        except Exception as exc:
+            self._path_status.value = str(exc)
+            self._path_status.color = RED
+        self.page.update()
+
+    def _path_values(self) -> tuple[str, str, str]:
+        return (
+            (self._path_root.value or "").strip(),
+            (self._path_origin.value or "").strip(),
+            (self._path_destination.value or "").strip(),
+        )
+
+    def _create_paths_clicked(self, _e) -> None:
+        if self._path_analysis_data is None:
+            self._snack("Analiza la raiz antes de crear la estructura.", error=True)
+            return
+        if not self._path_analysis_data.empty:
+            self._snack("La raiz tiene contenido. Usa Englobar contenido o Usar carpetas existentes.", error=True)
+            return
+        self.page.run_task(self._apply_paths_async, "create")
+
+    def _engulf_paths_clicked(self, _e) -> None:
+        if self._path_analysis_data is None:
+            self._snack("Analiza la raiz antes de mover contenido.", error=True)
+            return
+        if self._path_analysis_data.empty:
+            self._snack("La raiz esta vacia. Usa Crear estructura.", error=True)
+            return
+        count = self._path_analysis_data.entries
+        dialog = ft.AlertDialog(
+            title=ft.Text("Mover contenido al origen"),
+            content=ft.Text(
+                f"Se moveran {count} elementos de la raiz a la carpeta de originales. "
+                "No se sobrescribe nada. El servicio debe estar desinstalado. "
+                "Esta operacion se registra y puede intentar revertirse si falla."
+            ),
+            actions=[
+                ft.TextButton(content="Cancelar", on_click=lambda _e: self.page.pop_dialog()),
+                ft.FilledButton(content="Mover contenido", on_click=self._confirm_engulf),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _confirm_engulf(self, _e) -> None:
+        self.page.pop_dialog()
+        self.page.run_task(self._apply_paths_async, "engulf")
+
+    def _adopt_paths_clicked(self, _e) -> None:
+        self.page.run_task(self._apply_paths_async, "adopt")
+
+    async def _apply_paths_async(self, mode: str) -> None:
+        if self.busy:
+            return
+        root, origin, destination = self._path_values()
+        if not root or not origin or not destination:
+            self._path_status.value = "Completa la raiz, el origen y la copia."
+            self._path_status.color = RED
+            self.page.update()
+            return
+        self.busy = True
+        self._path_status.value = "Aplicando configuracion de rutas..."
+        self._path_status.color = ft.Colors.ON_SURFACE_VARIANT
+        self.page.update()
+        try:
+            audit = await asyncio.to_thread(self.installer.audit)
+            installed = audit.status != "not_installed"
+            await asyncio.to_thread(
+                self.config_service.apply_paths,
+                root,
+                origin,
+                destination,
+                mode,
+                service_installed=installed,
+            )
+            self._path_status.value = "Rutas guardadas. Continua con la instalacion del servicio."
+            self._path_status.color = GREEN
+            self._snack("Rutas preparadas correctamente.")
+            self._refresh_status(force_task=True)
+        except Exception as exc:
+            self._path_status.value = str(exc)
+            self._path_status.color = RED
+            self._snack(str(exc), error=True)
+        finally:
+            self.busy = False
+            self.page.update()
+
     def _build_settings(self) -> ft.Control:
         try:
             config = self.config_service.load()
@@ -348,8 +649,6 @@ class PanelApp:
         fields: dict[str, ft.TextField] = {}
         if config is not None:
             values = {
-                "origen": config.origen_str,
-                "destino": config.destino_str,
                 "aportes": config.aportes.subcarpeta,
                 "modo_origen": config.observacion.modo_origen,
                 "modo_destino": config.observacion.modo_destino,
@@ -363,13 +662,11 @@ class PanelApp:
             }
         else:
             values = {key: "" for key in (
-                "origen", "destino", "aportes", "modo_origen", "modo_destino",
+                "aportes", "modo_origen", "modo_destino",
                 "intervalo_min", "restauracion_max_min", "trabajadores",
                 "debounce_seg", "gracia_borrado_seg", "max_aporte_mb", "nivel_log"
             )}
         specs = [
-            ("origen", "Origen protegido", "C:\\CarpetaCompartida\\Mis_Originales"),
-            ("destino", "Destino publico", "\\\\servidor\\recurso\\Publico_Usuarios"),
             ("aportes", "Subcarpeta de aportes", "Aportes_Usuarios"),
             ("modo_origen", "Observador del origen (auto/nativo/polling)", "auto"),
             ("modo_destino", "Observador del destino (auto/nativo/polling)", "auto"),
@@ -409,8 +706,11 @@ class PanelApp:
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Divider(height=12, color=ft.Colors.OUTLINE_VARIANT),
-                    fields["origen"],
-                    fields["destino"],
+                    ft.Text(
+                        "La raiz, el origen y la copia se configuran en la pestana Rutas.",
+                        size=12,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
                     ft.Row([fields["aportes"], fields["nivel_log"]], spacing=12),
                     ft.Row([fields["modo_origen"], fields["modo_destino"]], spacing=12),
                     ft.Row(
@@ -467,12 +767,21 @@ class PanelApp:
         )
 
     def _build_install(self) -> ft.Control:
+        audit = self.installer.audit()
+        installed = audit.installed
+        try:
+            config = self.config_service.load()
+            config_ok = True
+            config_error = ""
+        except Exception as exc:
+            config = None
+            config_ok = False
+            config_error = str(exc)
         steps = [
-            ("1", "Requisitos", "Rutas, PowerShell, permisos de escritura y runtime."),
-            ("2", "Identidad", "Marcadores de origen y destino para evitar rutas equivocadas."),
-            ("3", "Permisos", "ACL locales automatizadas; ACL remotas se ejecutan en el servidor."),
-            ("4", "Tarea", "Registro en Task Scheduler y arranque."),
-            ("5", "Prueba", "Heartbeat, modo del servicio y acceso a rutas."),
+            ("1", "Rutas", "Configura la raiz, el origen y la copia."),
+            ("2", "Descarga", "El panel obtiene el servicio verificado desde GitHub."),
+            ("3", "Instalacion", "Registra la tarea y aplica permisos."),
+            ("4", "Prueba", "Inicia, comprueba heartbeat y arma el sistema."),
         ]
         step_rows = [
             ft.Row(
@@ -485,48 +794,110 @@ class PanelApp:
                         bgcolor=ACCENT,
                         border_radius=14,
                     ),
-                    ft.Column([ft.Text(title, weight=ft.FontWeight.BOLD), ft.Text(text, size=12, color=ft.Colors.ON_SURFACE_VARIANT)], spacing=2),
+                    ft.Column(
+                        [
+                            ft.Text(title, weight=ft.FontWeight.BOLD),
+                            ft.Text(text, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ],
+                        spacing=2,
+                    ),
                 ],
                 spacing=12,
             )
             for number, title, text in steps
         ]
-        self.install_status = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT, selectable=True)
+        self.install_status = ft.Text(
+            audit.message,
+            size=12,
+            color=GREEN if installed else ft.Colors.ON_SURFACE_VARIANT,
+            selectable=True,
+        )
+        update_message = (
+            f"Ultima version publicada: {self._release_info.version}"
+            if self._release_info is not None
+            else ""
+        )
+        self.update_status = ft.Text(
+            update_message,
+            size=12,
+            color=AMBER if self._update_available else ft.Colors.ON_SURFACE_VARIANT,
+            selectable=True,
+        )
+        if not config_ok:
+            config_hint = ft.Text(
+                f"Configuracion pendiente: {config_error}. Ve a Rutas y prepara la estructura.",
+                size=12,
+                color=AMBER,
+            )
+        else:
+            config_hint = ft.Text(
+                f"Raiz: {config.raiz_str}\nOrigen: {config.origen_str}\nCopia: {config.destino_str}",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                selectable=True,
+            )
+        if installed:
+            primary = ft.FilledButton(
+                content="Abrir panel",
+                icon=ft.Icons.DASHBOARD_OUTLINED,
+                on_click=lambda _e: self._select("panel"),
+            )
+            repair = ft.OutlinedButton(
+                content="Reparar instalacion",
+                icon=ft.Icons.BUILD,
+                on_click=self._repair_clicked,
+            )
+            uninstall = ft.OutlinedButton(
+                content="Desinstalar tarea",
+                icon=ft.Icons.DELETE_OUTLINE,
+                on_click=self._uninstall_clicked,
+            )
+        else:
+            primary = ft.FilledButton(
+                content="Instalar servicio",
+                icon=ft.Icons.DOWNLOAD,
+                on_click=self._install_clicked,
+            )
+            repair = ft.OutlinedButton(
+                content="Preparar rutas",
+                icon=ft.Icons.FOLDER_OPEN,
+                on_click=lambda _e: self._select("paths"),
+            )
+            uninstall = ft.OutlinedButton(
+                content="Desinstalar tarea",
+                icon=ft.Icons.DELETE_OUTLINE,
+                disabled=True,
+            )
+        check_updates = ft.OutlinedButton(
+            content="Buscar actualizaciones",
+            icon=ft.Icons.SYSTEM_UPDATE_ALT,
+            on_click=self._check_update_clicked,
+        )
+        update_button = ft.OutlinedButton(
+            content="Actualizar ahora" if self._update_available else "Actualizar",
+            icon=ft.Icons.SYSTEM_UPDATE,
+            on_click=self._update_clicked,
+            visible=self._update_available,
+        )
+        self._update_button = update_button
         body = card(
             ft.Column(
                 [
-                    ft.Text("Instalacion y reparacion", size=22, weight=ft.FontWeight.BOLD),
+                    ft.Text("Instalacion del servicio", size=22, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        "El asistente valida la configuracion, crea la carpeta de aportes, aplica permisos locales y registra la tarea. "
-                        "Si UAC se deniega, no se aplican cambios parciales.",
+                        "El panel descarga el servicio, verifica su SHA-256 y registra la tarea. "
+                        "No necesitas abrir PowerShell ni escribir comandos. UAC solo aparece para permisos.",
                         size=12,
                         color=ft.Colors.ON_SURFACE_VARIANT,
                     ),
                     ft.Divider(height=12, color=ft.Colors.OUTLINE_VARIANT),
                     *step_rows,
                     ft.Divider(height=12, color=ft.Colors.OUTLINE_VARIANT),
-                    ft.Row(
-                        [
-                            ft.FilledButton(
-                                content="Instalar o reparar",
-                                icon=ft.Icons.BUILD,
-                                on_click=self._install_clicked,
-                            ),
-                            ft.OutlinedButton(
-                                content="Armar sistema",
-                                icon=ft.Icons.LOCK_OPEN,
-                                on_click=self._arm_clicked,
-                            ),
-                            ft.OutlinedButton(
-                                content="Desinstalar tarea",
-                                icon=ft.Icons.DELETE_OUTLINE,
-                                on_click=self._uninstall_clicked,
-                            ),
-                        ],
-                        wrap=True,
-                        spacing=10,
-                    ),
+                    config_hint,
+                    ft.Row([primary, repair, uninstall], spacing=10, wrap=True),
+                    ft.Row([check_updates, update_button], spacing=10, wrap=True),
                     self.install_status,
+                    self.update_status,
                 ],
                 spacing=12,
             )
@@ -536,7 +907,7 @@ class PanelApp:
                 [
                     ft.Text("Permisos en SMB remoto", weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        "Si el origen o el destino estan en otro servidor, ejecuta los comandos del manual en ese servidor. "
+                        "Si el origen o el destino estan en otro servidor, la ACL remota debe aplicarse en ese servidor. "
                         "El instalador no modifica ACL remotas desde el cliente.",
                         size=12,
                         color=ft.Colors.ON_SURFACE_VARIANT,
@@ -546,7 +917,7 @@ class PanelApp:
             )
         )
         return ft.Column(
-            [ft.Text("Instalacion", size=26, weight=ft.FontWeight.BOLD), body, remote],
+            [ft.Text("Instalacion y actualizacion", size=26, weight=ft.FontWeight.BOLD), body, remote],
             spacing=16,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -669,20 +1040,214 @@ class PanelApp:
     async def _install_async(self) -> None:
         if self.busy:
             return
+        try:
+            config = self.config_service.load()
+        except Exception as exc:
+            self.install_status.value = f"Configura las rutas antes de instalar: {exc}"
+            self._snack("Ve a Rutas y prepara la estructura.", error=True)
+            self.page.update()
+            return
+        if not config.raiz_str or not config.origen_str or not config.destino_str:
+            self.install_status.value = "Faltan rutas. Ve a la pestana Rutas."
+            self.page.update()
+            return
         self.busy = True
-        self.install_status.value = "Ejecutando instalador. Si aparece UAC, confirma los permisos."
+        self.install_status.value = "Verificando instalacion y preparando servicio..."
         self.page.update()
         try:
+            audit = await asyncio.to_thread(self.installer.audit)
+            if audit.installed:
+                self.install_status.value = audit.message
+                self._snack("Ya esta instalado. Usa Reparar o Actualizar.", error=True)
+                return
+            service_path = self.base / "OriginWardenService.exe"
+            installer_path = self.base / "instalar_tarea.ps1"
+            release = self._release_info
+            if not installer_path.exists() or not service_path.exists():
+                self.install_status.value = "Descargando servicio verificado desde GitHub..."
+                self.page.update()
+                try:
+                    release = release or await asyncio.to_thread(self.release.check)
+                    self._release_info = release
+                    service_path, installer_path = await asyncio.to_thread(
+                        self.release.prepare_service, release
+                    )
+                except Exception as exc:
+                    if not installer_path.exists():
+                        raise ReleaseError(
+                            f"No se pudo obtener el servicio desde GitHub: {exc}"
+                        ) from exc
+            service_arg = service_path if service_path.exists() else None
+            self.install_status.value = "Instalando servicio. Confirma UAC si aparece."
+            self.page.update()
             ok, message = await asyncio.to_thread(
                 self.installer.install,
                 self.config_service.path,
                 True,
                 True,
+                service_arg,
+                release.version if release else None,
             )
             self.install_status.value = message
             self._snack("Instalacion completada." if ok else message, error=not ok)
         except Exception as exc:
             self.install_status.value = str(exc)
+            self._snack(str(exc), error=True)
+        finally:
+            self.busy = False
+            self.page.update()
+            self._refresh_status(force_task=True)
+
+    def _repair_clicked(self, _e) -> None:
+        self.page.run_task(self._repair_async)
+
+    async def _repair_async(self) -> None:
+        if self.busy:
+            return
+        self.busy = True
+        self.install_status.value = "Reparando tarea y ejecutable del servicio..."
+        self.page.update()
+        try:
+            service_path = self.base / "OriginWardenService.exe"
+            receipt = self.installer.receipt() or {}
+            ok, message = await asyncio.to_thread(
+                self.installer.repair,
+                self.config_service.path,
+                service_path if service_path.exists() else None,
+                str(receipt.get("version") or __version__),
+            )
+            self.install_status.value = message
+            self._snack(message, error=not ok)
+        except Exception as exc:
+            self.install_status.value = str(exc)
+            self._snack(str(exc), error=True)
+        finally:
+            self.busy = False
+            self.page.update()
+            self._refresh_status(force_task=True)
+
+    def _check_update_clicked(self, _e) -> None:
+        self.page.run_task(self._check_update_async, True)
+
+    async def _auto_update_check(self) -> None:
+        await asyncio.sleep(3)
+        try:
+            await self._check_update_async(False)
+        except Exception:
+            pass
+
+    async def _check_update_async(self, show_snack: bool = True) -> None:
+        try:
+            release = await asyncio.to_thread(self.release.check)
+            self._release_info = release
+            audit = await asyncio.to_thread(self.installer.audit)
+            receipt = self.installer.receipt() or {}
+            installed_version = str(receipt.get("version") or "0.0.0")
+            service_newer = (
+                audit.status == "installed_ok"
+                and bool(receipt)
+                and version_newer(release.version, installed_version)
+            )
+            panel_newer = release.panel_newer
+            self._update_available = service_newer or panel_newer
+            parts = [f"Ultima version publicada: {release.version}"]
+            if panel_newer:
+                parts.append("hay una actualizacion del panel")
+            if service_newer:
+                parts.append("hay una actualizacion del servicio")
+            if not panel_newer and not service_newer:
+                parts.append("estas al dia")
+            message = " | ".join(parts)
+            if hasattr(self, "update_status"):
+                self.update_status.value = message
+                self.update_status.color = AMBER if self._update_available else GREEN
+            if hasattr(self, "_update_button"):
+                self._update_button.visible = self._update_available
+                self._update_button.content = "Actualizar ahora"
+            if show_snack:
+                self._snack(message, error=False)
+            self.page.update()
+        except Exception as exc:
+            self._update_available = False
+            if hasattr(self, "update_status"):
+                self.update_status.value = f"No se pudo consultar GitHub: {exc}"
+                self.update_status.color = AMBER
+            if show_snack:
+                self._snack(str(exc), error=True)
+            self.page.update()
+
+    def _update_clicked(self, _e) -> None:
+        if not self._release_info:
+            self.page.run_task(self._check_update_async, True)
+            return
+        release = self._release_info
+        dialog = ft.AlertDialog(
+            title=ft.Text(f"Actualizar a {release.version}"),
+            content=ft.Text(
+                "Se descargara la version publicada, se verificara su SHA-256 y se aplicara. "
+                "El servicio puede detenerse unos segundos. El panel puede reiniciarse al finalizar."
+            ),
+            actions=[
+                ft.TextButton(content="Cancelar", on_click=lambda _e: self.page.pop_dialog()),
+                ft.FilledButton(content="Actualizar ahora", on_click=self._confirm_update),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _confirm_update(self, _e) -> None:
+        self.page.pop_dialog()
+        self.page.run_task(self._update_async)
+
+    async def _update_async(self) -> None:
+        if self.busy:
+            return
+        release = self._release_info
+        if not release:
+            self._snack("Primero busca actualizaciones.", error=True)
+            return
+        self.busy = True
+        if hasattr(self, "update_status"):
+            self.update_status.value = "Descargando y verificando actualizacion..."
+        self.page.update()
+        try:
+            audit = await asyncio.to_thread(self.installer.audit)
+            receipt = self.installer.receipt() or {}
+            installed_version = str(receipt.get("version") or "0.0.0")
+            service_updated = False
+            if (
+                audit.status == "installed_ok"
+                and bool(receipt)
+                and version_newer(release.version, installed_version)
+            ):
+                service_path, _installer_path = await asyncio.to_thread(
+                    self.release.prepare_service, release
+                )
+                ok, message = await asyncio.to_thread(
+                    self.installer.update,
+                    self.config_service.path,
+                    service_path,
+                    release.version,
+                )
+                if not ok:
+                    raise ReleaseError(message)
+                service_updated = True
+            if release.panel_newer:
+                new_panel = await asyncio.to_thread(self.release.download_panel, release)
+                await asyncio.to_thread(self.release.apply_panel_update, new_panel)
+                self._snack("Panel actualizado. Reiniciando...")
+                await self.page.window.close()
+                os._exit(0)
+            if hasattr(self, "update_status"):
+                self.update_status.value = (
+                    "Servicio actualizado correctamente." if service_updated else "No habia actualizacion aplicable."
+                )
+            self._update_available = False
+            if hasattr(self, "_update_button"):
+                self._update_button.visible = False
+            self._snack("Actualizacion completada.")
+        except Exception as exc:
+            if hasattr(self, "update_status"):
+                self.update_status.value = str(exc)
             self._snack(str(exc), error=True)
         finally:
             self.busy = False
@@ -769,7 +1334,9 @@ class PanelApp:
     def _open_path(self, kind: str) -> None:
         try:
             config = self.config_service.load()
-            if kind == "origen":
+            if kind == "raiz":
+                target = Path(str(config.raiz))
+            elif kind == "origen":
                 target = Path(str(config.origen))
             elif kind == "destino":
                 target = Path(str(config.destino))
@@ -895,6 +1462,8 @@ class PanelApp:
             alerts.append("El sistema no esta armado. La sincronizacion real esta bloqueada.")
         if status and status.get("stale") and task.running:
             alerts.append("El proceso figura en ejecucion pero no responde. Reinicia el servicio.")
+        if self._update_available:
+            alerts.append("Hay una actualizacion disponible. Abre Instalacion y pulsa Actualizar.")
         if request:
             kind = request.get("kind", "operacion")
             count = request.get("count", "?")
@@ -906,6 +1475,18 @@ class PanelApp:
             self.alert.visible = True
             alert_text = self.alert.content.controls[1]
             alert_text.value = " ".join(alerts)
+            if not task.exists:
+                self.alert_button.content = "Instalar servicio"
+                self.alert_button.icon = ft.Icons.DOWNLOAD
+                self.alert_button.on_click = lambda _e: self._select("install")
+            elif self._update_available:
+                self.alert_button.content = "Ver actualizacion"
+                self.alert_button.icon = ft.Icons.SYSTEM_UPDATE
+                self.alert_button.on_click = lambda _e: self._select("install")
+            else:
+                self.alert_button.content = "Abrir manual de recuperacion"
+                self.alert_button.icon = ft.Icons.MENU_BOOK_OUTLINED
+                self.alert_button.on_click = lambda _e: self._select("manual")
         else:
             self.alert.visible = False
         self.page.update()
