@@ -70,6 +70,17 @@ jobs:
             throw
           }
 
+      - name: Show build failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path "release-build.log") {
+            $lines = Get-Content "release-build.log" -Tail 40
+            foreach ($line in $lines) {
+              Write-Host "::error title=Build log::$line"
+            }
+          }
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
