@@ -61,7 +61,23 @@ jobs:
       - name: Build release assets
         shell: pwsh
         run: |
-          .\empaquetar.ps1 -Version "${{ steps.version.outputs.version }}"
+          $log = "release-build.log"
+          try {
+            .\empaquetar.ps1 -Version "${{ steps.version.outputs.version }}" *>&1 | Tee-Object -FilePath $log
+            if ($LASTEXITCODE -ne 0) { throw "empaquetar.ps1 termino con codigo $LASTEXITCODE" }
+          } catch {
+            $_ | Out-String | Tee-Object -FilePath $log -Append
+            throw
+          }
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-log
+          path: release-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Run tests
         shell: pwsh
