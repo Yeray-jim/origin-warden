@@ -83,12 +83,10 @@ jobs:
             $trace = $content | Select-String -Pattern "Traceback" | Select-Object -Last 1
             if ($trace) {
               $start = [Math]::Max(0, $trace.LineNumber - 2)
-              $end = [Math]::Min($content.Count - 1, $trace.LineNumber + 30)
-              for ($i = $start; $i -le $end; $i++) {
-                Write-Host "::error title=Traceback::$($content[$i])"
-              }
+              $block = ($content[$start..($content.Count - 1)] -join "`n")
+              Write-Host "::error title=Full traceback::$block"
             }
-            $content | Select-Object -Last 80 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            $content | Select-Object -Last 100 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
 
       - name: Upload build log
