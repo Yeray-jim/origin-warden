@@ -1,6 +1,6 @@
 # Origin Warden
 
-Version: **0.4.1**
+Version: **0.4.2**
 
 Repositorio: [github.com/Yeray-jim/origin-warden](https://github.com/Yeray-jim/origin-warden)
 
@@ -182,8 +182,8 @@ python -m unittest discover -s tests -v
 El flujo de mantenedor es:
 
 ```powershell
-.\empaquetar.ps1 -Version 0.4.1
-.\publicar_release.ps1 -Version 0.4.1
+.\empaquetar.ps1 -Version 0.4.2
+.\publicar_release.ps1 -Version 0.4.2
 ```
 
 `empaquetar.ps1` genera:
@@ -200,8 +200,8 @@ release/
 Tambien puedes publicar automaticamente desde GitHub Actions. El workflow `.github/workflows/release.yml` se ejecuta al empujar un tag `v*` o manualmente desde la pestana Actions. Compila en `windows-latest`, ejecuta las pruebas, verifica el manifest y publica la release.
 
 ```powershell
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
 `publicar_release.ps1` sigue disponible para publicar manualmente desde Windows.
@@ -544,7 +544,7 @@ powershell -ExecutionPolicy Bypass -File .\instalar_tarea.ps1 -Action Uninstall
 
 ## Estado del proyecto
 
-Version 0.4.1: corrige la instalacion cuando el ejecutable del servicio no se resuelve y mejora los mensajes de error del instalador. Version 0.4.0: instalacion y actualizacion sin terminal, descarga del servicio desde GitHub Releases, verificacion SHA-256, configuracion de raiz/origen/copia con creacion, englobado y adopcion, auditoria anti-duplicados, panel Flet, servicio headless, reconciliacion nivel-triggered, ingesta de aportes, papelera, simulacion y armado.
+Version 0.4.2: corrige la validacion del argumento vacio al registrar la tarea programada. Version 0.4.0: instalacion y actualizacion sin terminal, descarga del servicio desde GitHub Releases, verificacion SHA-256, configuracion de raiz/origen/copia con creacion, englobado y adopcion, auditoria anti-duplicados, panel Flet, servicio headless, reconciliacion nivel-triggered, ingesta de aportes, papelera, simulacion y armado.
 
 Pendiente para versiones posteriores:
 

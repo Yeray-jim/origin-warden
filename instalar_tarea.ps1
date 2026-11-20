@@ -7,7 +7,7 @@ param(
     [string]$Trigger = "Logon",
     [string]$ServiceExe = "",
     [string]$Owner = "",
-    [string]$Version = "0.4.1",
+    [string]$Version = "0.4.2",
     [switch]$ApplyPermissions,
     [switch]$StartService,
     [switch]$NoElevate
@@ -258,7 +258,11 @@ try {
         throw "No se pudo determinar el ejecutable del servicio."
     }
 
-    $taskAction = New-ScheduledTaskAction -Execute $execute -Argument $actionArguments -WorkingDirectory $workingDirectory
+    if ($actionArguments) {
+        $taskAction = New-ScheduledTaskAction -Execute $execute -Argument $actionArguments -WorkingDirectory $workingDirectory
+    } else {
+        $taskAction = New-ScheduledTaskAction -Execute $execute -WorkingDirectory $workingDirectory
+    }
     if (-not $taskAction) { throw "No se pudo crear la accion de la tarea programada." }
 
     if ($Trigger -eq "Startup") {
