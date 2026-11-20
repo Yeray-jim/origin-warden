@@ -1,0 +1,131 @@
+name: Release Origin Warden
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version sin la v inicial"
+        required: true
+        default: "0.4.0"
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  release:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $version = "${{ inputs.version }}".TrimStart("v")
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Version invalida: $version"
+          }
+          $source = Get-Content "syncsafe/__init__.py" -Raw
+          if ($source -notmatch '__version__\s*=\s*"([^"]+)"') {
+            throw "No se pudo leer __version__."
+          }
+          $codeVersion = $Matches[1]
+          if ($codeVersion -ne $version) {
+            throw "La version del codigo ($codeVersion) no coincide con la release ($version)."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+
+      - name: Build release assets
+        shell: pwsh
+        run: |
+          .\empaquetar.ps1 -Version "${{ steps.version.outputs.version }}"
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+      - name: Verify release manifest
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $required = @(
+            "release/OriginWardenPanel.exe",
+            "release/OriginWardenService.exe",
+            "release/instalar_tarea.ps1",
+            "release/release-manifest.json",
+            "release/SHA256SUMS.txt"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Falta el asset: $file" }
+          }
+          $manifest = Get-Content "release/release-manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $version) {
+            throw "El manifest declara $($manifest.version), se esperaba $version."
+          }
+          if (-not $manifest.panel -or -not $manifest.service -or -not $manifest.installer) {
+            throw "El manifest no contiene panel, service e installer."
+          }
+          Write-Host "Manifest verificado para $version."
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: origin-warden-${{ steps.version.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "v$version"
+          $assets = @(
+            "release/OriginWardenPanel.exe",
+            "release/OriginWardenService.exe",
+            "release/instalar_tarea.ps1",
+            "release/release-manifest.json",
+            "release/SHA256SUMS.txt"
+          )
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "No se pudieron reemplazar los assets." }
+            gh release edit $tag --title "Origin Warden $version" --latest --draft=false --prerelease=false
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo actualizar la release." }
+          } else {
+            git rev-parse --verify "refs/tags/$tag" *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release create $tag @assets --title "Origin Warden $version" --notes "Instalacion guiada sin terminal, rutas raiz/origen/copia, actualizaciones y auditoria." --latest
+            } else {
+              gh release create $tag @assets --title "Origin Warden $version" --notes "Instalacion guiada sin terminal, rutas raiz/origen/copia, actualizaciones y auditoria." --latest --target "$env:GITHUB_SHA"
+            }
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la release." }
+          }
+          gh release view $tag --json url,isDraft,isPrerelease

@@ -91,6 +91,9 @@ origin-warden/
 ├── instalar_tarea.ps1
 ├── empaquetar.ps1
 ├── publicar_release.ps1
+├── .github/
+│   └── workflows/
+│       └── release.yml
 ├── syncsafe/
 │   ├── config.py
 │   ├── engine.py
@@ -194,7 +197,14 @@ release/
 └── SHA256SUMS.txt
 ```
 
-`publicar_release.ps1` usa `gh release create` para publicar los assets.
+Tambien puedes publicar automaticamente desde GitHub Actions. El workflow `.github/workflows/release.yml` se ejecuta al empujar un tag `v*` o manualmente desde la pestana Actions. Compila en `windows-latest`, ejecuta las pruebas, verifica el manifest y publica la release.
+
+```powershell
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+`publicar_release.ps1` sigue disponible para publicar manualmente desde Windows.
 
 El panel consulta:
 

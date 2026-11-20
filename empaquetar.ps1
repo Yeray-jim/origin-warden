@@ -15,7 +15,10 @@ $Release = Join-Path $Root "release"
 $Package = Join-Path $Dist "paquete"
 
 if (-not $SkipVenv) {
-    if (-not (Test-Path $Python)) { py -3 -m venv $Venv }
+    $BasePython = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $BasePython) { $BasePython = Get-Command py -ErrorAction SilentlyContinue }
+    if (-not $BasePython) { throw "No se encontro python ni py en PATH." }
+    if (-not (Test-Path $Python)) { & $BasePython.Source -m venv $Venv }
     & $Python -m pip install --upgrade pip
     & $Python -m pip install -r (Join-Path $Root "requirements-dev.txt")
 }
