@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -1077,7 +1078,13 @@ class PanelApp:
                         raise ReleaseError(
                             f"No se pudo obtener el servicio desde GitHub: {exc}"
                         ) from exc
-            service_arg = service_path if service_path.exists() else None
+            service_target = self.base / "OriginWardenService.exe"
+            if service_path.exists():
+                if service_path.resolve() != service_target.resolve():
+                    shutil.copy2(service_path, service_target)
+            else:
+                raise ReleaseError(f"No se encontro el ejecutable del servicio: {service_path}")
+            service_arg = service_target
             self.install_status.value = "Instalando servicio. Confirma UAC si aparece."
             self.page.update()
             ok, message = await asyncio.to_thread(

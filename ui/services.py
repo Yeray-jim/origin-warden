@@ -35,10 +35,26 @@ def ensure_panel_copy() -> Path | None:
         return None
 
 
+def windows_user() -> str:
+    domain = os.environ.get("USERDOMAIN") or ""
+    name = os.environ.get("USERNAME") or ""
+    if domain and name:
+        return f"{domain}\\{name}"
+    if name:
+        return name
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
 def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).resolve().parent
-        candidates = [base, base.parent, default_install_root()]
+        install_root = default_install_root()
+        candidates = [install_root, base, base.parent]
     else:
         base = Path(__file__).resolve().parent.parent
         candidates = [base]
@@ -406,6 +422,30 @@ class InstallerService:
             creationflags=0x08000000 if os.name == "nt" else 0,
         )
 
+    def _owner_args(self) -> list[str]:
+        owner = windows_user()
+        if not owner:
+            return []
+        return ["-Owner", owner]
+
+    def _format_result(self, result: subprocess.CompletedProcess) -> tuple[bool, str]:
+        detail = self.read_result()
+        if detail:
+            ok = bool(detail.get("ok"))
+            message = str(detail.get("message") or "Operacion finalizada.")
+            code = str(detail.get("code") or "")
+            step = str(detail.get("step") or "")
+            if not ok:
+                parts = [message]
+                if step:
+                    parts.append(f"Paso: {step}")
+                if code:
+                    parts.append(f"Codigo: {code}")
+                return False, " ".join(parts)
+            return True, message
+        output = (result.stdout or result.stderr or "").strip()
+        return result.returncode == 0, output or "Instalacion finalizada."
+
     def install(
         self,
         config_path: Path,
@@ -420,6 +460,7 @@ class InstallerService:
         if audit.installed:
             return False, f"Ya esta instalado. {audit.message}"
         args = ["-Action", "Install", "-Config", str(config_path), "-Version", version or __version__]
+        args.extend(self._owner_args())
         if service_exe is not None:
             args.extend(["-ServiceExe", str(service_exe)])
         if apply_permissions:
@@ -434,11 +475,7 @@ class InstallerService:
             result = self._run_ps(args)
         except Exception as exc:
             return False, str(exc)
-        detail = self.read_result()
-        if detail:
-            return bool(detail.get("ok")), str(detail.get("message") or detail)
-        output = (result.stdout or result.stderr or "").strip()
-        return result.returncode == 0, output or "Instalacion finalizada."
+        return self._format_result(result)
 
     def repair(
         self,
@@ -449,6 +486,7 @@ class InstallerService:
         if not self.script.exists():
             return False, f"No se encontro {self.script}"
         args = ["-Action", "Repair", "-Config", str(config_path), "-Version", version or __version__]
+        args.extend(self._owner_args())
         if service_exe is not None:
             args.extend(["-ServiceExe", str(service_exe)])
         try:
@@ -459,10 +497,7 @@ class InstallerService:
             result = self._run_ps(args)
         except Exception as exc:
             return False, str(exc)
-        detail = self.read_result()
-        if detail:
-            return bool(detail.get("ok")), str(detail.get("message") or detail)
-        return result.returncode == 0, (result.stdout or result.stderr or "").strip()
+        return self._format_result(result)
 
     def update(
         self,
@@ -483,6 +518,7 @@ class InstallerService:
             version or __version__,
             "-StartService",
         ]
+        args.extend(self._owner_args())
         try:
             self.result.unlink(missing_ok=True)
         except OSError:
@@ -491,10 +527,7 @@ class InstallerService:
             result = self._run_ps(args)
         except Exception as exc:
             return False, str(exc)
-        detail = self.read_result()
-        if detail:
-            return bool(detail.get("ok")), str(detail.get("message") or detail)
-        return result.returncode == 0, (result.stdout or result.stderr or "").strip()
+        return self._format_result(result)
 
     def uninstall(self) -> tuple[bool, str]:
         if not self.script.exists():
