@@ -26,6 +26,17 @@ if (-not $SkipVenv) {
 }
 if (-not (Test-Path $Python)) { throw "No existe $Python. Ejecuta el script sin -SkipVenv." }
 
+$FletWinUtils = Join-Path $Venv "Lib\site-packages\flet_cli\__pyinstaller\win_utils.py"
+if (Test-Path $FletWinUtils) {
+    $winUtilsText = Get-Content $FletWinUtils -Raw
+    $patchedText = $winUtilsText.Replace('open(exe_path, "ab", encoding="utf-8")', 'open(exe_path, "ab")')
+    if ($patchedText -ne $winUtilsText) {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($FletWinUtils, $patchedText, $utf8NoBom)
+        Write-Host "Aplicado workaround de empaquetado Flet 1.1.2." -ForegroundColor Yellow
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 if (Test-Path $Release) { Remove-Item -Recurse -Force $Release }
 New-Item -ItemType Directory -Force -Path $Release | Out-Null
@@ -39,6 +50,7 @@ if (-not $PanelOnly) {
         --specpath (Join-Path $Root "build\servicio") `
         --exclude-module flet --exclude-module ui `
         (Join-Path $Root "sincronizador.pyw")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller fallo con codigo $LASTEXITCODE" }
 }
 
 if (-not $ServiceOnly) {
@@ -54,11 +66,15 @@ if (-not $ServiceOnly) {
             --file-version ($Version + ".0") `
             --company-name "Origin Warden" `
             --distpath $PanelDist
+        if ($LASTEXITCODE -ne 0) { throw "flet pack fallo con codigo $LASTEXITCODE" }
     } finally { Pop-Location }
 }
 
 Copy-Item (Join-Path $ServiceDist "OriginWardenService.exe") $Release -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $PanelDist "OriginWardenPanel.exe") $Release -ErrorAction SilentlyContinue
+foreach ($asset in @("OriginWardenPanel.exe", "OriginWardenService.exe")) {
+    if (-not (Test-Path (Join-Path $Release $asset))) { throw "No se genero el asset $asset" }
+}
 Copy-Item (Join-Path $Root "instalar_tarea.ps1") $Release
 Copy-Item (Join-Path $Root "README.md") $Release
 Copy-Item (Join-Path $Root "config.json") $Release
