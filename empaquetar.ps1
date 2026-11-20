@@ -45,7 +45,6 @@ if (-not $ServiceOnly) {
     try {
         & $Flet pack panel.pyw `
             --name OriginWardenPanel `
-            --noconsole `
             --product-name "Origin Warden" `
             --file-description "Panel de control de Origin Warden" `
             --product-version $Version `
